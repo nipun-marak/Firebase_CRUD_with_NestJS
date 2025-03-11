@@ -28,8 +28,12 @@ let UsersController = class UsersController {
     constructor(usersService) {
         this.usersService = usersService;
     }
-    async updateProfile(user, updateUserDto) {
-        const updatedUser = await this.usersService.updateProfile(user.uid, updateUserDto);
+    async updateProfile(user, updateUserDto, authorization) {
+        const token = authorization?.split('Bearer ')[1];
+        if (!token) {
+            throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+        }
+        const updatedUser = await this.usersService.updateProfile(token, updateUserDto);
         return {
             statusCode: common_1.HttpStatus.OK,
             message: 'User profile updated successfully',
@@ -44,13 +48,26 @@ let UsersController = class UsersController {
             data: null
         };
     }
-    async checkAuth(user) {
-        const userProfile = await this.usersService.findByUid(user.uid);
-        return {
-            statusCode: common_1.HttpStatus.OK,
-            message: 'User profile retrieved successfully',
-            data: userProfile
-        };
+    async checkAuth(user, authorization) {
+        try {
+            console.log("checkAuth for user:", user.uid);
+            const token = authorization?.split('Bearer ')[1];
+            if (!token) {
+                throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+            }
+            const userProfile = await this.usersService.getUserByToken(token);
+            return {
+                statusCode: common_1.HttpStatus.OK,
+                message: 'User profile retrieved successfully',
+                data: userProfile
+            };
+        }
+        catch (error) {
+            console.error("Error in checkAuth:", error);
+            if (error instanceof common_1.HttpException)
+                throw error;
+            throw new common_1.HttpException('Failed to get user profile', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
     async login(loginDto) {
         const loginData = await this.usersService.login(loginDto);
@@ -105,24 +122,68 @@ let UsersController = class UsersController {
         return {
             statusCode: common_1.HttpStatus.OK,
             message: 'Tokens refreshed successfully',
-            data: tokens
+            data: {
+                accessToken: tokens.accessToken,
+                refreshToken: tokens.refreshToken,
+                refreshTokenExpiry: tokens.refreshTokenExpiry.toString()
+            }
         };
     }
-    async chat(user, chatMessageDto) {
-        const chatHistory = await this.usersService.chat(user.uid, chatMessageDto);
+    async chat(user, chatMessageDto, authorization) {
+        const token = authorization?.split('Bearer ')[1];
+        if (!token) {
+            throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+        }
+        const chatResult = await this.usersService.chat(token, chatMessageDto);
         return {
             statusCode: common_1.HttpStatus.OK,
             message: 'Chat message processed successfully',
-            data: chatHistory
+            data: chatResult
         };
     }
-    async getChatHistory(user) {
-        const chatHistory = await this.usersService.getChatHistory(user.uid);
+    async getChatHistory(user, chatId, authorization) {
+        const token = authorization?.split('Bearer ')[1];
+        if (!token) {
+            throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+        }
+        const chatHistory = await this.usersService.getChatHistory(token, chatId);
         return {
             statusCode: common_1.HttpStatus.OK,
             message: 'Chat history retrieved successfully',
             data: chatHistory
         };
+    }
+    async getChatConversations(user, authorization) {
+        const token = authorization?.split('Bearer ')[1];
+        if (!token) {
+            throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+        }
+        const conversations = await this.usersService.getChatConversations(token);
+        return {
+            statusCode: common_1.HttpStatus.OK,
+            message: 'Chat conversations retrieved successfully',
+            data: conversations
+        };
+    }
+    async getAllChatHistory(user, authorization) {
+        try {
+            const token = authorization?.split('Bearer ')[1];
+            if (!token) {
+                throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+            }
+            const allChatHistory = await this.usersService.getAllChatHistory(token);
+            return {
+                statusCode: common_1.HttpStatus.OK,
+                message: 'All chat history retrieved successfully',
+                data: allChatHistory
+            };
+        }
+        catch (error) {
+            console.error('Error in getAllChatHistory:', error);
+            if (error instanceof common_1.HttpException)
+                throw error;
+            throw new common_1.HttpException('Failed to get all chat history', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
+        }
     }
 };
 exports.UsersController = UsersController;
@@ -131,8 +192,9 @@ __decorate([
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Headers)('authorization')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, update_user_dto_1.UpdateUserDto]),
+    __metadata("design:paramtypes", [Object, update_user_dto_1.UpdateUserDto, String]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "updateProfile", null);
 __decorate([
@@ -146,8 +208,9 @@ __decorate([
     (0, common_1.Get)('me'),
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Headers)('authorization')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "checkAuth", null);
 __decorate([
@@ -158,13 +221,13 @@ __decorate([
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "login", null);
 __decorate([
-    (0, common_1.Get)(),
+    (0, common_1.Get)('all'),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "findAll", null);
 __decorate([
-    (0, common_1.Get)(':id'),
+    (0, common_1.Get)('one/:id'),
     __param(0, (0, common_1.Param)('id')),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String]),
@@ -204,18 +267,39 @@ __decorate([
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
     __param(1, (0, common_1.Body)()),
+    __param(2, (0, common_1.Headers)('authorization')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object, chat_message_dto_1.ChatMessageDto]),
+    __metadata("design:paramtypes", [Object, chat_message_dto_1.ChatMessageDto, String]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "chat", null);
+__decorate([
+    (0, common_1.Get)('chat-history/:chatId'),
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Param)('chatId')),
+    __param(2, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getChatHistory", null);
+__decorate([
+    (0, common_1.Get)('chat-conversations'),
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Headers)('authorization')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getChatConversations", null);
 __decorate([
     (0, common_1.Get)('chat-history'),
     (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
     __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Headers)('authorization')),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [Object]),
+    __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
-], UsersController.prototype, "getChatHistory", null);
+], UsersController.prototype, "getAllChatHistory", null);
 exports.UsersController = UsersController = __decorate([
     (0, common_1.Controller)('users'),
     __metadata("design:paramtypes", [users_service_1.UsersService])

@@ -20,10 +20,12 @@ export interface LoginResponse {
     };
     accessToken: string;
     refreshToken: string;
+    refreshTokenExpiry: string;
 }
 export interface TokenResponse {
     accessToken: string;
     refreshToken: string;
+    refreshTokenExpiry: string;
 }
 export interface ChatMessage {
     role: 'user' | 'assistant';
@@ -36,14 +38,23 @@ export declare class UsersService {
     private readonly FEMALE_PROFILE_IMAGE;
     resetPassword(resetPasswordDto: ResetPasswordDto): Promise<void>;
     register(createUserDto: CreateUserDto): Promise<User>;
-    refreshToken(refreshTokenDto: RefreshTokenDto): Promise<TokenResponse>;
     login(loginDto: LoginDto): Promise<LoginResponse>;
+    private generateRefreshToken;
+    refreshToken(refreshTokenDto: RefreshTokenDto): Promise<TokenResponse>;
     findAll(): Promise<User[]>;
     findOne(id: string): Promise<User>;
     update(id: string, user: Partial<User>): Promise<void>;
     remove(id: string): Promise<void>;
-    findByUid(uid: string): Promise<User>;
-    updateProfile(uid: string, updateUserDto: UpdateUserDto): Promise<User>;
-    chat(uid: string, chatMessageDto: ChatMessageDto): Promise<ChatMessage[]>;
-    getChatHistory(uid: string): Promise<ChatMessage[]>;
+    getUserByToken(token: string): Promise<User>;
+    updateProfile(accessToken: string, updateUserDto: UpdateUserDto): Promise<User>;
+    chat(accessToken: string, chatMessageDto: ChatMessageDto): Promise<{
+        messages: ChatMessage[];
+        chatId: string;
+    }>;
+    getChatHistory(accessToken: string, chatId: string): Promise<ChatMessage[]>;
+    getChatConversations(accessToken: string): Promise<any[]>;
+    getAllChatHistory(accessToken: string): Promise<{
+        conversations: any[];
+        messages: ChatMessage[];
+    }>;
 }

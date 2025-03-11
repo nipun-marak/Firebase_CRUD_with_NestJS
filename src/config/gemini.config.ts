@@ -12,9 +12,6 @@ if (!process.env.GEMINI_API_KEY) {
 
 export const geminiAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Initialize the model with specific configurations
-const model = geminiAI.getGenerativeModel({ model: 'gemini-pro' });
-
 // Default system prompt as fallback
 const defaultSystemPrompt = ``;
 
@@ -29,8 +26,15 @@ export async function getSystemPromptFromFirebase(): Promise<string> {
       return defaultSystemPrompt;
     }
 
+    // Get the data and convert to string
     const data = docSnap.data();
-    return data.systemPrompt || defaultSystemPrompt;
+    
+    // Retrieve systemPrompt and ensure it's a string.
+    const systemPrompt = JSON.stringify(data)
+    const parsedData = JSON.parse(systemPrompt)
+    // console.log('parsedData', parsedData)
+    // console.log('systemPrompt', parsedData.systemPromt)
+    return parsedData.systemPromt || defaultSystemPrompt;
   } catch (error) {
     console.error('Error fetching system prompt:', error);
     return defaultSystemPrompt;
@@ -49,7 +53,10 @@ export async function getExampleConversationsFromFirebase(): Promise<any[]> {
     }
 
     const data = docSnap.data();
-    return data.conversations || defaultExampleConversations;
+    const systemPrompt = JSON.stringify(data)
+    const parsedData = JSON.parse(systemPrompt)
+    // console.log('data', data.conversations)
+    return parsedData.exampleHistory || defaultExampleConversations;
   } catch (error) {
     console.error('Error fetching example conversations:', error);
     return defaultExampleConversations;

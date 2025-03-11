@@ -12,7 +12,6 @@ if (!process.env.GEMINI_API_KEY) {
     throw new Error('Gemini API key is missing. Please check your .env file.');
 }
 exports.geminiAI = new generative_ai_1.GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = exports.geminiAI.getGenerativeModel({ model: 'gemini-pro' });
 const defaultSystemPrompt = ``;
 async function getSystemPromptFromFirebase() {
     try {
@@ -23,7 +22,9 @@ async function getSystemPromptFromFirebase() {
             return defaultSystemPrompt;
         }
         const data = docSnap.data();
-        return data.systemPrompt || defaultSystemPrompt;
+        const systemPrompt = JSON.stringify(data);
+        const parsedData = JSON.parse(systemPrompt);
+        return parsedData.systemPromt || defaultSystemPrompt;
     }
     catch (error) {
         console.error('Error fetching system prompt:', error);
@@ -39,7 +40,9 @@ async function getExampleConversationsFromFirebase() {
             return defaultExampleConversations;
         }
         const data = docSnap.data();
-        return data.conversations || defaultExampleConversations;
+        const systemPrompt = JSON.stringify(data);
+        const parsedData = JSON.parse(systemPrompt);
+        return parsedData.exampleHistory || defaultExampleConversations;
     }
     catch (error) {
         console.error('Error fetching example conversations:', error);

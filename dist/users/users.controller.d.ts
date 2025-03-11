@@ -11,9 +11,9 @@ import { DecodedIdToken } from 'firebase-admin/auth';
 export declare class UsersController {
     private readonly usersService;
     constructor(usersService: UsersService);
-    updateProfile(user: DecodedIdToken, updateUserDto: UpdateUserDto): Promise<ApiResponse<User>>;
+    updateProfile(user: DecodedIdToken, updateUserDto: UpdateUserDto, authorization: string): Promise<ApiResponse<User>>;
     resetPassword(resetPasswordDto: ResetPasswordDto): Promise<ApiResponse<void>>;
-    checkAuth(user: DecodedIdToken): Promise<ApiResponse<User>>;
+    checkAuth(user: DecodedIdToken, authorization: string): Promise<ApiResponse<User>>;
     login(loginDto: LoginDto): Promise<ApiResponse<LoginResponse>>;
     findAll(): Promise<ApiResponse<User[]>>;
     findOne(id: string): Promise<ApiResponse<User>>;
@@ -21,6 +21,14 @@ export declare class UsersController {
     remove(id: string): Promise<ApiResponse<void>>;
     register(createUserDto: CreateUserDto): Promise<ApiResponse<User>>;
     refreshToken(refreshTokenDto: RefreshTokenDto): Promise<ApiResponse<TokenResponse>>;
-    chat(user: DecodedIdToken, chatMessageDto: ChatMessageDto): Promise<ApiResponse<ChatMessage[]>>;
-    getChatHistory(user: DecodedIdToken): Promise<ApiResponse<ChatMessage[]>>;
+    chat(user: DecodedIdToken, chatMessageDto: ChatMessageDto, authorization: string): Promise<ApiResponse<{
+        messages: ChatMessage[];
+        chatId: string;
+    }>>;
+    getChatHistory(user: DecodedIdToken, chatId: string, authorization: string): Promise<ApiResponse<ChatMessage[]>>;
+    getChatConversations(user: DecodedIdToken, authorization: string): Promise<ApiResponse<any[]>>;
+    getAllChatHistory(user: DecodedIdToken, authorization: string): Promise<ApiResponse<{
+        conversations: any[];
+        messages: ChatMessage[];
+    }>>;
 }

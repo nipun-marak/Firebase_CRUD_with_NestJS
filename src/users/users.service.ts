@@ -16,6 +16,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import * as dotenv from 'dotenv';
+import * as crypto from 'crypto';
 
 // Load environment variables
 dotenv.config();
@@ -37,11 +38,13 @@ export interface LoginResponse {
   };
   accessToken: string;
   refreshToken: string;
+  refreshTokenExpiry: string;
 }
 
 export interface TokenResponse {
   accessToken: string;
   refreshToken: string;
+  refreshTokenExpiry: string;
 }
 
 export interface ChatMessage {
@@ -112,31 +115,6 @@ export class UsersService {
     }
   }
 
-  async refreshToken(refreshTokenDto: RefreshTokenDto): Promise<TokenResponse> {
-    try {
-      // Verify the refresh token
-      const decodedToken = await adminAuth.verifyIdToken(refreshTokenDto.refreshToken);
-      
-      // Generate a new custom token
-      const customToken = await adminAuth.createCustomToken(decodedToken.uid);
-      
-      // Exchange custom token for ID tokens
-      const userCredential = await signInWithCustomToken(auth, customToken);
-      const accessToken = await userCredential.user.getIdToken();
-      const refreshToken = await userCredential.user.getIdToken(true); // Force refresh
-
-      return {
-        accessToken,
-        refreshToken
-      };
-    } catch (error) {
-      if (error.code === 'auth/id-token-expired') {
-        throw new HttpException('Refresh token expired', HttpStatus.UNAUTHORIZED);
-      }
-      throw new HttpException('Failed to refresh token', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-  }
-
   async login(loginDto: LoginDto): Promise<LoginResponse> {
     try {
       const userCredential = await signInWithEmailAndPassword(
@@ -146,7 +124,19 @@ export class UsersService {
       );
 
       const accessToken = await userCredential.user.getIdToken();
-      const refreshToken = await userCredential.user.getIdToken(true); // Force refresh
+      
+      // Generate a custom refresh token with 1 year expiry
+      const refreshToken = this.generateRefreshToken();
+      const refreshTokenExpiry = new Date();
+      refreshTokenExpiry.setFullYear(refreshTokenExpiry.getFullYear() + 1); // 1 year expiry
+      
+      // Store the refresh token in Firestore
+      await setDoc(doc(db, 'refreshTokens', refreshToken), {
+        uid: userCredential.user.uid,
+        email: userCredential.user.email,
+        createdAt: Timestamp.fromDate(new Date()),
+        expiresAt: Timestamp.fromDate(refreshTokenExpiry)
+      });
       
       return {
         user: {
@@ -154,7 +144,8 @@ export class UsersService {
           email: userCredential.user.email as string,
         },
         accessToken,
-        refreshToken
+        refreshToken,
+        refreshTokenExpiry: refreshTokenExpiry.toISOString()
       };
     } catch (error) {
       if (error.code === 'auth/user-not-found') {
@@ -170,6 +161,73 @@ export class UsersService {
         throw new HttpException('Too many failed login attempts. Please try again later.', HttpStatus.TOO_MANY_REQUESTS);
       }
       throw new HttpException('Login failed', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // Generate a secure random refresh token
+  private generateRefreshToken(): string {
+    return crypto.randomBytes(64).toString('hex');
+  }
+
+  async refreshToken(refreshTokenDto: RefreshTokenDto): Promise<TokenResponse> {
+    try {
+      // Get the refresh token from Firestore
+      const tokenQuery = query(
+        collection(db, 'refreshTokens'),
+        where('__name__', '==', refreshTokenDto.refreshToken)
+      );
+      
+      const tokenSnapshot = await getDocs(tokenQuery);
+      
+      if (tokenSnapshot.empty) {
+        throw new HttpException('Invalid refresh token', HttpStatus.UNAUTHORIZED);
+      }
+      
+      const tokenDoc = tokenSnapshot.docs[0];
+      const tokenData = tokenDoc.data();
+      
+      // Check if token is expired
+      const expiresAt = tokenData.expiresAt.toDate();
+      if (expiresAt < new Date()) {
+        // Remove the expired token
+        await deleteDoc(doc(db, 'refreshTokens', tokenDoc.id));
+        throw new HttpException('Refresh token expired', HttpStatus.UNAUTHORIZED);
+      }
+      
+      // Get the user from Firebase Auth
+      const userRecord = await adminAuth.getUser(tokenData.uid);
+      
+      // Generate a new custom token
+      const customToken = await adminAuth.createCustomToken(userRecord.uid);
+      
+      // Exchange custom token for ID token (access token)
+      const userCredential = await signInWithCustomToken(auth, customToken);
+      const accessToken = await userCredential.user.getIdToken();
+      
+      // Generate a new refresh token
+      const newRefreshToken = this.generateRefreshToken();
+      const refreshTokenExpiry = new Date();
+      refreshTokenExpiry.setFullYear(refreshTokenExpiry.getFullYear() + 1); // 1 year expiry
+      
+      // Store the new refresh token in Firestore
+      await setDoc(doc(db, 'refreshTokens', newRefreshToken), {
+        uid: userRecord.uid,
+        email: userRecord.email,
+        createdAt: Timestamp.fromDate(new Date()),
+        expiresAt: Timestamp.fromDate(refreshTokenExpiry)
+      });
+      
+      // Delete the old refresh token
+      await deleteDoc(doc(db, 'refreshTokens', tokenDoc.id));
+      
+      return {
+        accessToken,
+        refreshToken: newRefreshToken,
+        refreshTokenExpiry: refreshTokenExpiry.toISOString()
+      };
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to refresh token', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
@@ -236,71 +294,169 @@ export class UsersService {
     }
   }
 
-  async findByUid(uid: string): Promise<User> {
+  // Get user by access token
+  async getUserByToken(token: string): Promise<User> {
     try {
-      const docRef = doc(db, this.usersCollection, uid);
-      const docSnap = await getDoc(docRef);
+      // Verify the access token
+      const decodedToken = await adminAuth.verifyIdToken(token);
+      const uid = decodedToken.uid;
       
-      if (!docSnap.exists()) {
-        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+      // Query the user from Firestore
+      const userQuery = query(
+        collection(db, this.usersCollection), 
+        where('uid', '==', uid)
+      );
+      const querySnapshot = await getDocs(userQuery);
+      
+      if (querySnapshot.empty) {
+        // Try to get user info from Firebase Auth
+        try {
+          const userRecord = await adminAuth.getUser(uid);
+          
+          // Create a new user document
+          const userData: User = {
+            uid: userRecord.uid,
+            email: userRecord.email || 'unknown@example.com',
+            fullName: userRecord.displayName || 'User',
+            gender: Gender.MALE, // Default
+            profileImage: this.MALE_PROFILE_IMAGE,
+            createdAt: new Date()
+          };
+          
+          // Store user data in Firestore
+          await setDoc(doc(db, this.usersCollection, uid), userData);
+          
+          return userData;
+        } catch (authError) {
+          throw new HttpException('Invalid or expired token', HttpStatus.UNAUTHORIZED);
+        }
       }
-
-      const data = docSnap.data();
-      // Convert Firestore Timestamp to Date
+      
+      const userDoc = querySnapshot.docs[0];
+      
       return {
-        ...data,
-        id: docSnap.id,
-        createdAt: data.createdAt.toDate()
+        id: userDoc.id,
+        ...userDoc.data(),
+        createdAt: userDoc.data().createdAt.toDate()
       } as User;
     } catch (error) {
+      if (error.code === 'auth/id-token-expired') {
+        throw new HttpException('Token expired', HttpStatus.UNAUTHORIZED);
+      }
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to fetch user profile', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException('Failed to authenticate user', HttpStatus.UNAUTHORIZED);
     }
   }
 
-  async updateProfile(uid: string, updateUserDto: UpdateUserDto): Promise<User> {
+  async updateProfile(accessToken: string, updateUserDto: UpdateUserDto): Promise<User> {
     try {
-      const docRef = doc(db, this.usersCollection, uid);
-      const docSnap = await getDoc(docRef);
+      // Get user from token
+      const user = await this.getUserByToken(accessToken);
+      const uid = user.uid;
       
-      if (!docSnap.exists()) {
-        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
-      }
-
-      const updates: Partial<User> = { ...updateUserDto };
+      // Prepare update data
+      const updateData: Partial<User> = {
+        ...updateUserDto
+      };
       
-      // Update profile image if gender is changed
       if (updateUserDto.gender) {
-        updates.profileImage = updateUserDto.gender === Gender.MALE 
+        updateData.profileImage = updateUserDto.gender === Gender.MALE 
           ? this.MALE_PROFILE_IMAGE 
           : this.FEMALE_PROFILE_IMAGE;
       }
-
-      await updateDoc(docRef, updates);
-
-      // Fetch and return updated user data
-      const updatedDocSnap = await getDoc(docRef);
-      if (!updatedDocSnap.exists()) {
-        throw new HttpException('Failed to fetch updated user data', HttpStatus.INTERNAL_SERVER_ERROR);
-      }
-
-      const data = updatedDocSnap.data();
+      
+      // Update the user in Firestore
+      await updateDoc(doc(db, this.usersCollection, uid), updateData);
+      
+      // Return updated user
       return {
-        ...data,
-        id: updatedDocSnap.id,
-        createdAt: data.createdAt.toDate()
-      } as User;
+        ...user,
+        ...updateData
+      };
     } catch (error) {
       if (error instanceof HttpException) throw error;
-      throw new HttpException('Failed to update user profile', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException('Failed to update profile', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  async chat(uid: string, chatMessageDto: ChatMessageDto): Promise<ChatMessage[]> {
+  async chat(accessToken: string, chatMessageDto: ChatMessageDto): Promise<{ messages: ChatMessage[], chatId: string }> {
     try {
-      // Get the chat history subcollection reference
+      console.log("Processing chat for token:", accessToken ? "token-provided" : "no-token");
+      
+      // First, get the user from token
+      const user = await this.getUserByToken(accessToken);
+      const uid = user.uid;
+      
+      // Chat reference should be:
+      // users/{uid}/chat-history/{chatId}/messages/{messageId}
+      // We need to ensure proper collection-document-collection structure
+      
+      // Check if this is a new chat or existing one
+      let chatId: string;
       const chatHistoryRef = collection(db, this.usersCollection, uid, 'chat-history');
-
+      
+      if (chatMessageDto.isNewChat) {
+        // For new chat, create a document name from first message
+        const words = chatMessageDto.message.split(/\s+/);
+        const first100Words = words.slice(0, 100).join(' ');
+        const sanitizedName = first100Words
+          .replace(/[^a-zA-Z0-9_]/g, '_')
+          .substring(0, 50); // Firestore document names have limits
+          
+        // Ensure uniqueness with timestamp
+        chatId = sanitizedName ? `${sanitizedName}_${Date.now()}` : `chat_${Date.now()}`;
+        
+        // Create an empty document to serve as the chat container
+        await setDoc(doc(chatHistoryRef, chatId), {
+          title: first100Words.substring(0, 50),
+          createdAt: Timestamp.fromDate(new Date()),
+          updatedAt: Timestamp.fromDate(new Date())
+        });
+      } else {
+        // For existing chat, use the provided chatId
+        chatId = chatMessageDto.chatId || '';
+        
+        if (!chatId) {
+          // Find the most recent chat if no chatId provided
+          const chatsSnapshot = await getDocs(chatHistoryRef);
+          const chats = chatsSnapshot.docs;
+          
+          if (chats.length === 0) {
+            // No existing chats, create a new one
+            chatId = `chat_${Date.now()}`;
+            await setDoc(doc(chatHistoryRef, chatId), {
+              title: chatMessageDto.message.substring(0, 50),
+              createdAt: Timestamp.fromDate(new Date()),
+              updatedAt: Timestamp.fromDate(new Date())
+            });
+          } else {
+            // Use the most recent chat document
+            const sortedChats = chats.map(doc => {
+              const data = doc.data();
+              return { 
+                id: doc.id, 
+                updatedAt: data.updatedAt,
+                createdAt: data.createdAt
+              };
+            }).sort((a, b) => {
+              const dateA = a.updatedAt?.toDate() || new Date(0);
+              const dateB = b.updatedAt?.toDate() || new Date(0);
+              return dateB.getTime() - dateA.getTime();
+            });
+            
+            chatId = sortedChats[0].id;
+          }
+        }
+        
+        // Update the chat document's updatedAt field
+        await updateDoc(doc(chatHistoryRef, chatId), {
+          updatedAt: Timestamp.fromDate(new Date())
+        });
+      }
+      
+      // Reference to the messages collection inside the chat document
+      const messagesRef = collection(chatHistoryRef, chatId, 'messages');
+      
       // Store user message
       const userMessage: ChatMessage = {
         role: 'user',
@@ -308,13 +464,13 @@ export class UsersService {
         timestamp: new Date()
       };
 
-      await addDoc(chatHistoryRef, {
+      await addDoc(messagesRef, {
         ...userMessage,
         timestamp: Timestamp.fromDate(userMessage.timestamp)
       });
 
       // Get response from Gemini
-      const model = geminiAI.getGenerativeModel({ model: "gemini-2.0-pro-exp-02-05" });
+      const model = geminiAI.getGenerativeModel({ model: "gemini-1.5-pro" });
       const systemPrompt = await getSystemPromptFromFirebase();
       const exampleConversations = await getExampleConversationsFromFirebase();
       
@@ -339,30 +495,53 @@ export class UsersService {
         timestamp: new Date()
       };
 
-      await addDoc(chatHistoryRef, {
+      await addDoc(messagesRef, {
         ...assistantChatMessage,
         timestamp: Timestamp.fromDate(assistantChatMessage.timestamp)
       });
 
-      // Get updated chat history
-      const chatSnapshot = await getDocs(query(chatHistoryRef));
-      return chatSnapshot.docs.map(doc => {
+      // Get updated chat history for this chat
+      const chatSnapshot = await getDocs(query(messagesRef));
+      const messages = chatSnapshot.docs.map(doc => {
         const data = doc.data();
         return {
           ...data,
           timestamp: data.timestamp.toDate()
         } as ChatMessage;
       }).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
+      
+      // Return the current chat's messages
+      return {
+        messages: messages,
+        chatId: chatId
+      };
     } catch (error) {
+      console.error('Chat error:', error);
       throw new HttpException('Failed to process chat message', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 
-  async getChatHistory(uid: string): Promise<ChatMessage[]> {
+  // Get chat history for a specific chat
+  async getChatHistory(accessToken: string, chatId: string): Promise<ChatMessage[]> {
     try {
-      const chatHistoryRef = collection(db, this.usersCollection, uid, 'chat-history');
-      const chatSnapshot = await getDocs(query(chatHistoryRef));
+      console.log("Getting chat history with token:", accessToken ? "token-provided" : "no-token");
+      
+      // First, get the user from token
+      const user = await this.getUserByToken(accessToken);
+      const uid = user.uid;
+      
+      // Then check if chat exists
+      const chatDocRef = doc(db, this.usersCollection, uid, 'chat-history', chatId);
+      const chatDoc = await getDoc(chatDocRef);
+      
+      if (!chatDoc.exists()) {
+        console.log("Chat not found:", chatId);
+        throw new HttpException('Chat not found', HttpStatus.NOT_FOUND);
+      }
+      
+      // Use the proper collection-document-collection path structure
+      const messagesRef = collection(db, this.usersCollection, uid, 'chat-history', chatId, 'messages');
+      const chatSnapshot = await getDocs(query(messagesRef));
       
       return chatSnapshot.docs.map(doc => {
         const data = doc.data();
@@ -372,7 +551,107 @@ export class UsersService {
         } as ChatMessage;
       }).sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
     } catch (error) {
-      throw new HttpException('Failed to fetch chat history', HttpStatus.INTERNAL_SERVER_ERROR);
+      console.error('Error getting chat history:', error);
+      throw new HttpException('Failed to get chat history', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // Get all chat conversations for a user
+  async getChatConversations(accessToken: string): Promise<any[]> {
+    try {
+      console.log("Getting chat conversations with token:", accessToken ? "token-provided" : "no-token");
+      
+      // First, get the user from token
+      const user = await this.getUserByToken(accessToken);
+      const uid = user.uid;
+      
+      // Proceed with getting chat history
+      const chatHistoryRef = collection(db, this.usersCollection, uid, 'chat-history');
+      const chatsSnapshot = await getDocs(chatHistoryRef);
+      
+      // If no chats exist yet, return empty array
+      if (chatsSnapshot.empty) {
+        console.log("No chat conversations found for user:", uid);
+        return [];
+      }
+      
+      // Get all chat documents with their metadata
+      const conversations = await Promise.all(
+        chatsSnapshot.docs.map(async (chatDoc) => {
+          const chatId = chatDoc.id;
+          const chatData = chatDoc.data();
+          
+          // Get message count
+          const messagesRef = collection(db, this.usersCollection, uid, 'chat-history', chatId, 'messages');
+          const messagesSnapshot = await getDocs(messagesRef);
+          
+          return {
+            id: chatId,
+            ...chatData,
+            createdAt: chatData.createdAt?.toDate?.() || chatData.createdAt,
+            updatedAt: chatData.updatedAt?.toDate?.() || chatData.updatedAt,
+            messageCount: messagesSnapshot.size
+          };
+        })
+      );
+      
+      // Sort by last updated timestamp (newest first)
+      return conversations.sort((a, b) => {
+        const dateA = a.updatedAt instanceof Date ? a.updatedAt : new Date(0);
+        const dateB = b.updatedAt instanceof Date ? b.updatedAt : new Date(0);
+        return dateB.getTime() - dateA.getTime();
+      });
+    } catch (error) {
+      console.error('Error getting chat conversations:', error);
+      throw new HttpException('Failed to get chat conversations', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  // Get all chat history for a user across all conversations
+  async getAllChatHistory(accessToken: string): Promise<{ conversations: any[], messages: ChatMessage[] }> {
+    try {
+      // First, get all conversations using the token
+      const conversations = await this.getChatConversations(accessToken);
+      
+      // Get the user from token
+      const user = await this.getUserByToken(accessToken);
+      const uid = user.uid;
+      
+      // Then, gather all messages from all conversations
+      const allMessages: ChatMessage[] = [];
+      
+      // Process each conversation to get its messages
+      await Promise.all(
+        conversations.map(async (conversation) => {
+          const chatId = conversation.id;
+          const messagesRef = collection(db, this.usersCollection, uid, 'chat-history', chatId, 'messages');
+          const messagesSnapshot = await getDocs(messagesRef);
+          
+          // Process messages
+          const messages = messagesSnapshot.docs.map(doc => {
+            const data = doc.data();
+            return {
+              ...data,
+              timestamp: data.timestamp.toDate(),
+              chatId: chatId,
+              conversationTitle: conversation.title || 'Untitled Chat'
+            } as ChatMessage & { chatId: string, conversationTitle: string };
+          });
+          
+          allMessages.push(...messages);
+        })
+      );
+      
+      // Sort all messages by timestamp (newest first)
+      allMessages.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+      
+      return {
+        conversations,
+        messages: allMessages
+      };
+    } catch (error) {
+      console.error('Error getting all chat history:', error);
+      throw new HttpException('Failed to get chat history', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 } 

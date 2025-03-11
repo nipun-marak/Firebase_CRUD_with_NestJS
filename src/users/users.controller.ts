@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, HttpStatus, UseGuards, Patch } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Put, Delete, HttpStatus, UseGuards, Patch, HttpException, Headers } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User, LoginResponse, TokenResponse, ChatMessage } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -20,9 +20,15 @@ export class UsersController {
   @UseGuards(AuthGuard)
   async updateProfile(
     @CurrentUser() user: DecodedIdToken,
-    @Body() updateUserDto: UpdateUserDto
+    @Body() updateUserDto: UpdateUserDto,
+    @Headers('authorization') authorization: string
   ): Promise<ApiResponse<User>> {
-    const updatedUser = await this.usersService.updateProfile(user.uid, updateUserDto);
+    const token = authorization?.split('Bearer ')[1];
+    if (!token) {
+      throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+    }
+    
+    const updatedUser = await this.usersService.updateProfile(token, updateUserDto);
     return {
       statusCode: HttpStatus.OK,
       message: 'User profile updated successfully',
@@ -42,13 +48,28 @@ export class UsersController {
 
   @Get('me')
   @UseGuards(AuthGuard)
-  async checkAuth(@CurrentUser() user: DecodedIdToken): Promise<ApiResponse<User>> {
-    const userProfile = await this.usersService.findByUid(user.uid);
-    return {
-      statusCode: HttpStatus.OK,
-      message: 'User profile retrieved successfully',
-      data: userProfile
-    };
+  async checkAuth(
+    @CurrentUser() user: DecodedIdToken,
+    @Headers('authorization') authorization: string
+  ): Promise<ApiResponse<User>> {
+    try {
+      console.log("checkAuth for user:", user.uid);
+      const token = authorization?.split('Bearer ')[1];
+      if (!token) {
+        throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+      }
+      
+      const userProfile = await this.usersService.getUserByToken(token);
+      return {
+        statusCode: HttpStatus.OK,
+        message: 'User profile retrieved successfully',
+        data: userProfile
+      };
+    } catch (error) {
+      console.error("Error in checkAuth:", error);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to get user profile', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 
   @Post('login')
@@ -61,7 +82,7 @@ export class UsersController {
     };
   }
 
-  @Get()
+  @Get('all')
   async findAll(): Promise<ApiResponse<User[]>> {
     const users = await this.usersService.findAll();
     return {
@@ -71,7 +92,7 @@ export class UsersController {
     };
   }
 
-  @Get(':id')
+  @Get('one/:id')
   async findOne(@Param('id') id: string): Promise<ApiResponse<User>> {
     const user = await this.usersService.findOne(id);
     return {
@@ -117,7 +138,11 @@ export class UsersController {
     return {
       statusCode: HttpStatus.OK,
       message: 'Tokens refreshed successfully',
-      data: tokens
+      data: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        refreshTokenExpiry: tokens.refreshTokenExpiry.toString()
+      }
     };
   }
 
@@ -125,26 +150,83 @@ export class UsersController {
   @UseGuards(AuthGuard)
   async chat(
     @CurrentUser() user: DecodedIdToken,
-    @Body() chatMessageDto: ChatMessageDto
-  ): Promise<ApiResponse<ChatMessage[]>> {
-    const chatHistory = await this.usersService.chat(user.uid, chatMessageDto);
+    @Body() chatMessageDto: ChatMessageDto,
+    @Headers('authorization') authorization: string
+  ): Promise<ApiResponse<{ messages: ChatMessage[], chatId: string }>> {
+    const token = authorization?.split('Bearer ')[1];
+    if (!token) {
+      throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+    }
+    
+    const chatResult = await this.usersService.chat(token, chatMessageDto);
     return {
       statusCode: HttpStatus.OK,
       message: 'Chat message processed successfully',
-      data: chatHistory
+      data: chatResult
     };
   }
 
-  @Get('chat-history')
+  @Get('chat-history/:chatId')
   @UseGuards(AuthGuard)
   async getChatHistory(
-    @CurrentUser() user: DecodedIdToken
+    @CurrentUser() user: DecodedIdToken,
+    @Param('chatId') chatId: string,
+    @Headers('authorization') authorization: string
   ): Promise<ApiResponse<ChatMessage[]>> {
-    const chatHistory = await this.usersService.getChatHistory(user.uid);
+    const token = authorization?.split('Bearer ')[1];
+    if (!token) {
+      throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+    }
+    
+    const chatHistory = await this.usersService.getChatHistory(token, chatId);
     return {
       statusCode: HttpStatus.OK,
       message: 'Chat history retrieved successfully',
       data: chatHistory
     };
+  }
+  
+  @Get('chat-conversations')
+  @UseGuards(AuthGuard)
+  async getChatConversations(
+    @CurrentUser() user: DecodedIdToken,
+    @Headers('authorization') authorization: string
+  ): Promise<ApiResponse<any[]>> {
+    const token = authorization?.split('Bearer ')[1];
+    if (!token) {
+      throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+    }
+    
+    const conversations = await this.usersService.getChatConversations(token);
+    return {
+      statusCode: HttpStatus.OK,
+      message: 'Chat conversations retrieved successfully',
+      data: conversations
+    };
+  }
+
+  @Get('chat-history')
+  @UseGuards(AuthGuard)
+  async getAllChatHistory(
+    @CurrentUser() user: DecodedIdToken,
+    @Headers('authorization') authorization: string
+  ): Promise<ApiResponse<{ conversations: any[], messages: ChatMessage[] }>> {
+    try {
+      const token = authorization?.split('Bearer ')[1];
+      if (!token) {
+        throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+      }
+      
+      const allChatHistory = await this.usersService.getAllChatHistory(token);
+      return {
+        statusCode: HttpStatus.OK,
+        message: 'All chat history retrieved successfully',
+        data: allChatHistory
+      };
+    } catch (error) {
+      console.error('Error in getAllChatHistory:', error);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to get all chat history', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
 } 
