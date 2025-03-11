@@ -31,4 +31,9 @@ export declare class UsersController {
         conversations: any[];
         messages: ChatMessage[];
     }>>;
+    getDailyVerse(user: DecodedIdToken, authorization: string, date: string): Promise<ApiResponse<{
+        verse: string;
+        reference: string;
+        occasion: string;
+    }>>;
 }

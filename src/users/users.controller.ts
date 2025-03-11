@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, HttpStatus, UseGuards, Patch, HttpException, Headers } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Put, Delete, HttpStatus, UseGuards, Patch, HttpException, Headers, Query } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { User, LoginResponse, TokenResponse, ChatMessage } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
@@ -227,6 +227,32 @@ export class UsersController {
       console.error('Error in getAllChatHistory:', error);
       if (error instanceof HttpException) throw error;
       throw new HttpException('Failed to get all chat history', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  @Get('daily-verse/:date')
+  @UseGuards(AuthGuard)
+  async getDailyVerse(
+    @CurrentUser() user: DecodedIdToken,
+    @Headers('authorization') authorization: string,
+    @Param('date') date: string,
+  ): Promise<ApiResponse<{ verse: string, reference: string, occasion: string }>> {
+    try {
+      const token = authorization?.split('Bearer ')[1];
+      if (!token) {
+        throw new HttpException('Missing authorization token', HttpStatus.UNAUTHORIZED);
+      }
+      
+      const verseData = await this.usersService.getDailyVerse(token, date);
+      return {
+        statusCode: HttpStatus.OK,
+        message: 'Daily Bible verse retrieved successfully',
+        data: verseData
+      };
+    } catch (error) {
+      console.error('Error in getDailyVerse:', error);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException('Failed to retrieve daily verse', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 } 

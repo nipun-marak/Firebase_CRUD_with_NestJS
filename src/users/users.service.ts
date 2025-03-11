@@ -1,13 +1,14 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
-import { db, auth } from '../config/firebase.config';
-import { collection, addDoc, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc, query, where, Timestamp } from 'firebase/firestore';
+import { db, auth, adminAuth } from '../config/firebase.config';
+import { collection, addDoc, getDocs, doc, getDoc, updateDoc, deleteDoc, setDoc, query, where, Timestamp, orderBy, limit } from 'firebase/firestore';
 import { 
   createUserWithEmailAndPassword, 
   signInWithEmailAndPassword, 
   sendPasswordResetEmail,
-  signInWithCustomToken
+  signInWithCustomToken,
+  UserCredential,
+  updateProfile as updateFirebaseProfile
 } from 'firebase/auth';
-import { adminAuth } from '../config/firebase.config';
 import { geminiAI, getExampleConversationsFromFirebase, getSystemPromptFromFirebase } from '../config/gemini.config';
 import { CreateUserDto, Gender } from './dto/create-user.dto';
 import { LoginDto } from './dto/login.dto';
@@ -17,6 +18,7 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ChatMessageDto } from './dto/chat-message.dto';
 import * as dotenv from 'dotenv';
 import * as crypto from 'crypto';
+import { DecodedIdToken } from 'firebase-admin/auth';
 
 // Load environment variables
 dotenv.config();
@@ -652,6 +654,65 @@ export class UsersService {
     } catch (error) {
       console.error('Error getting all chat history:', error);
       throw new HttpException('Failed to get chat history', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  async getDailyVerse(accessToken: string, date: string): Promise<{ verse: string, reference: string, occasion: string }> {
+    try {
+      // Verify the user is authenticated
+      await this.getUserByToken(accessToken);
+      
+      // Use a more natural and conversational prompt for Gemini
+      const geminiPrompt = `Today is ${date}. Does today have any special significance according to the Christian religion? If yes, then give me a Bible verse according to the day. If not, then which Bible verse would be good for today? Return only the verse text and its reference in the following JSON format: {"verse": "The full verse text", "reference": "Book Chapter:Verse", "occasion": "The name of the special day or 'regular day' if none"}. Do not include any explanations or additional text.`;
+      
+      // Create a generative model
+      const model = geminiAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+      
+      // Generate content
+      const result = await model.generateContent(geminiPrompt);
+      const response = result.response.text();
+      
+      try {
+        // Clean the response by removing markdown formatting
+        let cleanedResponse = response;
+        
+        // Remove markdown code block markers if present
+        if (response.includes('```')) {
+          // Extract content between code block markers
+          const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+          if (codeBlockMatch && codeBlockMatch[1]) {
+            cleanedResponse = codeBlockMatch[1];
+          }
+        }
+        
+        // Parse the cleaned JSON response from Gemini
+        const parsedResponse = JSON.parse(cleanedResponse);
+        return {
+          verse: parsedResponse.verse,
+          reference: parsedResponse.reference,
+          occasion: parsedResponse.occasion || "regular day"
+        };
+      } catch (parseError) {
+        // Fallback in case Gemini doesn't return valid JSON
+        console.error('Error parsing Gemini response as JSON:', parseError);
+        
+        // Extract verse and reference using regex if JSON parsing fails
+        const verseMatch = response.match(/"verse":\s*"([^"]+)"/);
+        const referenceMatch = response.match(/"reference":\s*"([^"]+)"/);
+        const occasionMatch = response.match(/"occasion":\s*"([^"]+)"/);
+        
+        return {
+          verse: verseMatch ? verseMatch[1] : "The Lord is my shepherd; I shall not want.",
+          reference: referenceMatch ? referenceMatch[1] : "Psalm 23:1",
+          occasion: occasionMatch ? occasionMatch[1] : "regular day"
+        };
+      }
+    } catch (error) {
+      console.error('Error in getDailyVerse:', error);
+      throw new HttpException(
+        'Failed to retrieve daily verse',
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
 } 

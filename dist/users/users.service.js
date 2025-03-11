@@ -11,7 +11,6 @@ const common_1 = require("@nestjs/common");
 const firebase_config_1 = require("../config/firebase.config");
 const firestore_1 = require("firebase/firestore");
 const auth_1 = require("firebase/auth");
-const firebase_config_2 = require("../config/firebase.config");
 const gemini_config_1 = require("../config/gemini.config");
 const create_user_dto_1 = require("./dto/create-user.dto");
 const dotenv = require("dotenv");
@@ -122,8 +121,8 @@ let UsersService = class UsersService {
                 await (0, firestore_1.deleteDoc)((0, firestore_1.doc)(firebase_config_1.db, 'refreshTokens', tokenDoc.id));
                 throw new common_1.HttpException('Refresh token expired', common_1.HttpStatus.UNAUTHORIZED);
             }
-            const userRecord = await firebase_config_2.adminAuth.getUser(tokenData.uid);
-            const customToken = await firebase_config_2.adminAuth.createCustomToken(userRecord.uid);
+            const userRecord = await firebase_config_1.adminAuth.getUser(tokenData.uid);
+            const customToken = await firebase_config_1.adminAuth.createCustomToken(userRecord.uid);
             const userCredential = await (0, auth_1.signInWithCustomToken)(firebase_config_1.auth, customToken);
             const accessToken = await userCredential.user.getIdToken();
             const newRefreshToken = this.generateRefreshToken();
@@ -210,13 +209,13 @@ let UsersService = class UsersService {
     }
     async getUserByToken(token) {
         try {
-            const decodedToken = await firebase_config_2.adminAuth.verifyIdToken(token);
+            const decodedToken = await firebase_config_1.adminAuth.verifyIdToken(token);
             const uid = decodedToken.uid;
             const userQuery = (0, firestore_1.query)((0, firestore_1.collection)(firebase_config_1.db, this.usersCollection), (0, firestore_1.where)('uid', '==', uid));
             const querySnapshot = await (0, firestore_1.getDocs)(userQuery);
             if (querySnapshot.empty) {
                 try {
-                    const userRecord = await firebase_config_2.adminAuth.getUser(uid);
+                    const userRecord = await firebase_config_1.adminAuth.getUser(uid);
                     const userData = {
                         uid: userRecord.uid,
                         email: userRecord.email || 'unknown@example.com',
@@ -468,6 +467,45 @@ let UsersService = class UsersService {
         catch (error) {
             console.error('Error getting all chat history:', error);
             throw new common_1.HttpException('Failed to get chat history', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+    async getDailyVerse(accessToken, date) {
+        try {
+            await this.getUserByToken(accessToken);
+            const geminiPrompt = `Today is ${date}. Does today have any special significance according to the Christian religion? If yes, then give me a Bible verse according to the day. If not, then which Bible verse would be good for today? Return only the verse text and its reference in the following JSON format: {"verse": "The full verse text", "reference": "Book Chapter:Verse", "occasion": "The name of the special day or 'regular day' if none"}. Do not include any explanations or additional text.`;
+            const model = gemini_config_1.geminiAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+            const result = await model.generateContent(geminiPrompt);
+            const response = result.response.text();
+            try {
+                let cleanedResponse = response;
+                if (response.includes('```')) {
+                    const codeBlockMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                    if (codeBlockMatch && codeBlockMatch[1]) {
+                        cleanedResponse = codeBlockMatch[1];
+                    }
+                }
+                const parsedResponse = JSON.parse(cleanedResponse);
+                return {
+                    verse: parsedResponse.verse,
+                    reference: parsedResponse.reference,
+                    occasion: parsedResponse.occasion || "regular day"
+                };
+            }
+            catch (parseError) {
+                console.error('Error parsing Gemini response as JSON:', parseError);
+                const verseMatch = response.match(/"verse":\s*"([^"]+)"/);
+                const referenceMatch = response.match(/"reference":\s*"([^"]+)"/);
+                const occasionMatch = response.match(/"occasion":\s*"([^"]+)"/);
+                return {
+                    verse: verseMatch ? verseMatch[1] : "The Lord is my shepherd; I shall not want.",
+                    reference: referenceMatch ? referenceMatch[1] : "Psalm 23:1",
+                    occasion: occasionMatch ? occasionMatch[1] : "regular day"
+                };
+            }
+        }
+        catch (error) {
+            console.error('Error in getDailyVerse:', error);
+            throw new common_1.HttpException('Failed to retrieve daily verse', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
 };

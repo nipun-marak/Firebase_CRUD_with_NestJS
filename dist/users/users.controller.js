@@ -185,6 +185,26 @@ let UsersController = class UsersController {
             throw new common_1.HttpException('Failed to get all chat history', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
         }
     }
+    async getDailyVerse(user, authorization, date) {
+        try {
+            const token = authorization?.split('Bearer ')[1];
+            if (!token) {
+                throw new common_1.HttpException('Missing authorization token', common_1.HttpStatus.UNAUTHORIZED);
+            }
+            const verseData = await this.usersService.getDailyVerse(token, date);
+            return {
+                statusCode: common_1.HttpStatus.OK,
+                message: 'Daily Bible verse retrieved successfully',
+                data: verseData
+            };
+        }
+        catch (error) {
+            console.error('Error in getDailyVerse:', error);
+            if (error instanceof common_1.HttpException)
+                throw error;
+            throw new common_1.HttpException('Failed to retrieve daily verse', common_1.HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
 };
 exports.UsersController = UsersController;
 __decorate([
@@ -300,6 +320,16 @@ __decorate([
     __metadata("design:paramtypes", [Object, String]),
     __metadata("design:returntype", Promise)
 ], UsersController.prototype, "getAllChatHistory", null);
+__decorate([
+    (0, common_1.Get)('daily-verse/:date'),
+    (0, common_1.UseGuards)(auth_guard_1.AuthGuard),
+    __param(0, (0, current_user_decorator_1.CurrentUser)()),
+    __param(1, (0, common_1.Headers)('authorization')),
+    __param(2, (0, common_1.Param)('date')),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [Object, String, String]),
+    __metadata("design:returntype", Promise)
+], UsersController.prototype, "getDailyVerse", null);
 exports.UsersController = UsersController = __decorate([
     (0, common_1.Controller)('users'),
     __metadata("design:paramtypes", [users_service_1.UsersService])

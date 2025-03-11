@@ -57,4 +57,9 @@ export declare class UsersService {
         conversations: any[];
         messages: ChatMessage[];
     }>;
+    getDailyVerse(accessToken: string, date: string): Promise<{
+        verse: string;
+        reference: string;
+        occasion: string;
+    }>;
 }
